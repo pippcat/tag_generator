@@ -4,9 +4,11 @@
 let
   requirements = ps: with ps; [
     click
-    Flask
+    flask
     numpy
-    Pillow
+    pillow
+    opencv4
+    pyzbar
     requests
     tomli
   ];
