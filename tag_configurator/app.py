@@ -8,19 +8,75 @@ except ImportError:
 import uuid
 from pathlib import Path
 
+import cv2
+import numpy as np
+
+import random
+import string
 import requests.exceptions
-from flask import Flask, jsonify, render_template, request, url_for
+from flask import Flask, jsonify, render_template, request, url_for, Response
 
 from .draw_image import generate_image
 from .upload_image import upload_image
+#from .barcode_reader import generate_frames
+from pyzbar.pyzbar import decode
 
 app = Flask(__name__)
 
 app.config.from_file("../config.toml", load=tomllib.load, text=False, silent=True)
 app.config.from_prefixed_env()
 
+camera = cv2.VideoCapture(0)
+barcode_detector = cv2.QRCodeDetector()
+last_barcode = None
+
 if "AP_IP" not in app.config:
     raise ValueError("AP_IP must be set in the config.toml or environment variables.")
+
+def generate_frames():
+    while True:
+        # Read frame from the camera
+        success, frame = camera.read()
+        if not success:
+            print("Error reading frame from the camera")
+            break
+
+        # Convert the frame to grayscale for barcode detection
+        gray_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+
+        # Detect barcodes in the frame
+        barcodes = decode(gray_frame)
+
+        # Display the frame with barcode information
+        frame_with_overlay = frame.copy()
+
+        for barcode in barcodes:
+            barcode_data = barcode.data.decode('utf-8')
+            print(f"Detected Barcode: {barcode_data}")
+
+            # Draw a rectangle around the barcode
+            rect_points = barcode.polygon
+            if rect_points and len(rect_points) == 4:
+                rect_points = np.array(rect_points, dtype=int).reshape((-1, 1, 2))
+                cv2.polylines(frame_with_overlay, [rect_points], isClosed=True, color=(0, 255, 0), thickness=2)
+
+            cv2.putText(frame_with_overlay, f"Barcode: {barcode_data}", (10, 30),
+                        cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2, cv2.LINE_AA)
+        # Encode the frame to JPEG format
+        _, buffer = cv2.imencode('.jpg', frame_with_overlay)
+        frame = buffer.tobytes()
+
+        yield (b'--frame\r\n'
+               b'Content-Type: image/jpeg\r\n\r\n' + frame + b'\r\n')
+
+@app.route("/barcode.html")
+def barcode():
+    return render_template('barcode.html')
+
+@app.route('/video_feed')
+def video_feed():
+    return Response(generate_frames(),
+                    mimetype='multipart/x-mixed-replace; boundary=frame')
 
 
 @app.route("/")
@@ -28,7 +84,7 @@ def index():
     """Render the index page."""
     inputs = [
         [{"name": "Nickname", "icon": "@.png"}],
-        [{"name": "Habitat", "icon": "flag.png", "icon_slug": "first_line_icon"}],
+        [{"name": "Habitat", "icon": "mastodon.png", "icon_slug": "first_line_icon"}],
         [
             {"name": "Space", "icon": "house.png", "icon_slug": "second_line_icon1"},
             {
@@ -109,8 +165,8 @@ def upload():
     # Extract the name, and mac address from the data
     mac_address = data["mac_address"]
     del data["mac_address"]
-
-    file_name = f"tag_configurator/static/user/{uuid.uuid4().hex}.jpg"
+    image_name = ''.join(random.choices(string.ascii_uppercase + string.digits, k=10))
+    file_name = f"tag_configurator/static/user/{image_name}.jpg"
     print(data)
     generate_image(
         data,
